@@ -81,7 +81,11 @@ class ImprovedOutagePredictionSystem:
             
             X['problem_length'] = X['PROBLEMSTATEMENT'].str.len()
             X['action_length'] = X['CORRECTIVEACTION'].str.len()
-            
+
+            # Ensure all categorical columns are strings
+            for col in X.select_dtypes(include=['object']).columns:
+                X[col] = X[col].astype(str)
+
             X.drop(['Start', 'End', 'PROBLEMSTATEMENT', 'CORRECTIVEACTION'], axis=1, inplace=True)
             
             return X, y
