@@ -1,0 +1,277 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import (
+    train_test_split,
+    cross_val_score,
+    StratifiedKFold,
+    RandomizedSearchCV
+)
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import (
+    classification_report,
+    confusion_matrix,
+    roc_auc_score,
+    precision_recall_curve,
+    auc
+)
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from imblearn.over_sampling import SMOTE
+import traceback
+
+
+class ImprovedOutagePredictionSystem:
+    def __init__(self, file_path):
+        self.file_path = file_path
+        self.model = None
+        self.feature_importances_ = None
+        self.preprocessor = None
+        self.numeric_features = None
+        self.categorical_features = None
+
+    def load_and_preprocess_data(self):
+        print("Loading and preprocessing data...")
+        try:
+            df = pd.read_excel(self.file_path)
+            
+            relevant_columns = [
+                "APPID", "Change", "Start", "End", "APP_LEVEL", 
+                "ENTITY", "APPLICATIONNAME", "CrisisLEVEL", 
+                "NONIT", "PROBLEMSTATEMENT", "CORRECTIVEACTION"
+            ]
+            df = df[relevant_columns]
+            
+            df['PROBLEMSTATEMENT'] = df['PROBLEMSTATEMENT'].fillna('Unknown')
+            df['CORRECTIVEACTION'] = df['CORRECTIVEACTION'].fillna('None')
+            
+            df['Start'] = pd.to_datetime(df['Start'], errors='coerce')
+            df['End'] = pd.to_datetime(df['End'], errors='coerce')
+            
+            df = df.dropna(subset=['Start', 'End'])
+            
+            df['is_outage'] = df['CrisisLEVEL'].apply(
+                lambda x: 1 if x in ['P4', 'P3'] else 0
+            )
+            
+            print(f"Target distribution:\n{df['is_outage'].value_counts(normalize=True)}")
+            return df
+        except Exception as e:
+            print(f"Error loading data: {e}")
+            traceback.print_exc()
+            return pd.DataFrame()
+
+    def feature_engineering(self, df):
+        print("Performing feature engineering...")
+        try:
+            X = df.copy()
+            y = X.pop('is_outage')
+            
+            X['outage_duration'] = (X['End'] - X['Start']).dt.total_seconds() / 3600
+            X['hour_of_day'] = X['Start'].dt.hour
+            X['day_of_week'] = X['Start'].dt.dayofweek
+            X['month'] = X['Start'].dt.month
+            X['is_weekend'] = X['day_of_week'].isin([5, 6]).astype(int)
+            X['is_business_hours'] = ((X['hour_of_day'] >= 9) & 
+                                    (X['hour_of_day'] <= 17) & 
+                                    ~X['is_weekend']).astype(int)
+            
+            X['problem_length'] = X['PROBLEMSTATEMENT'].str.len()
+            X['action_length'] = X['CORRECTIVEACTION'].str.len()
+            
+            X.drop(['Start', 'End', 'PROBLEMSTATEMENT', 'CORRECTIVEACTION'], axis=1, inplace=True)
+            
+            return X, y
+        except Exception as e:
+            print(f"Error during feature engineering: {e}")
+            traceback.print_exc()
+            return pd.DataFrame(), pd.Series()
+
+    def create_preprocessing_pipeline(self, X):
+        numeric_features = X.select_dtypes(include=['int64', 'float64']).columns
+        categorical_features = X.select_dtypes(include=['object', 'string']).columns
+
+        numeric_transformer = Pipeline(steps=[
+            ('imputer', SimpleImputer(strategy='median')),
+            ('scaler', StandardScaler())
+        ])
+
+        categorical_transformer = Pipeline(steps=[
+            ('imputer', SimpleImputer(strategy='constant', fill_value='missing')),
+            ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
+        ])
+
+        preprocessor = ColumnTransformer(
+            transformers=[
+                ('num', numeric_transformer, numeric_features),
+                ('cat', categorical_transformer, categorical_features)
+            ],
+            remainder='drop'
+        )
+
+        self.numeric_features = numeric_features
+        self.categorical_features = categorical_features
+        self.preprocessor = preprocessor
+
+        return preprocessor
+
+    def train_model(self, X, y):
+        print("Training the model...")
+        try:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, stratify=y, random_state=42
+            )
+            
+            # Apply SMOTE and convert to DataFrame to retain column names
+            smote = SMOTE(random_state=42, sampling_strategy='auto')
+            X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+            X_train_resampled = pd.DataFrame(X_train_resampled, columns=X.columns)
+            X_test = pd.DataFrame(X_test, columns=X.columns)
+            
+            # Apply preprocessing pipeline
+            print("Fitting preprocessing pipeline...")
+            X_train_transformed = self.preprocessor.fit_transform(X_train_resampled)
+            X_test_transformed = self.preprocessor.transform(X_test)
+            
+            # Retrieve feature names after transformation
+            feature_names = self.preprocessor.get_feature_names_out()
+            
+            # Train Random Forest model
+            param_grid = {
+                'n_estimators': [100, 200, 300],
+                'max_depth': [10, 20, 30, None],
+                'min_samples_split': [2, 5, 10],
+                'min_samples_leaf': [1, 2, 4],
+                'class_weight': ['balanced', 'balanced_subsample']
+            }
+            
+            base_model = RandomForestClassifier(random_state=42)
+            random_search = RandomizedSearchCV(
+                base_model, param_grid, n_iter=20,
+                cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
+                scoring='roc_auc', n_jobs=-1, random_state=42
+            )
+            
+            random_search.fit(X_train_transformed, y_train_resampled)
+            self.model = random_search.best_estimator_
+            
+            # Compute feature importances
+            self.feature_importances_ = pd.Series(
+                self.model.feature_importances_,
+                index=feature_names
+            ).sort_values(ascending=False)
+            
+            y_pred = self.model.predict(X_test_transformed)
+            y_pred_proba = self.model.predict_proba(X_test_transformed)[:, 1]
+            
+            precision, recall, _ = precision_recall_curve(y_test, y_pred_proba)
+            pr_auc = auc(recall, precision)
+            
+            cv_scores = cross_val_score(
+                self.model, X, y, 
+                cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
+                scoring='roc_auc'
+            )
+            
+            metrics = {
+                "roc_auc": roc_auc_score(y_test, y_pred_proba),
+                "pr_auc": pr_auc,
+                "cv_scores_mean": cv_scores.mean(),
+                "cv_scores_std": cv_scores.std(),
+                "classification_report": classification_report(y_test, y_pred),
+                "confusion_matrix": confusion_matrix(y_test, y_pred),
+                "feature_importances": self.feature_importances_
+            }
+            
+            return metrics
+        
+        except Exception as e:
+            print(f"Error during training: {e}")
+            traceback.print_exc()
+            return {}
+
+    def plot_feature_importances(self):
+        if self.feature_importances_ is not None:
+            plt.figure(figsize=(10, 6))
+            self.feature_importances_[:10].plot(kind='bar')
+            plt.title('Top 10 Most Important Features')
+            plt.tight_layout()
+            plt.savefig('feature_importances.png')
+            plt.close()
+        else:
+            print("Feature importances are not available. Skipping plot.")
+
+    def generate_html_report(self, metrics):
+        print("Generating HTML report...")
+        try:
+            plt.figure(figsize=(8, 6))
+            sns.heatmap(metrics['confusion_matrix'], 
+                       annot=True, 
+                       fmt='d', 
+                       cmap='Blues',
+                       xticklabels=['No Outage', 'Outage'],
+                       yticklabels=['No Outage', 'Outage'])
+            plt.title('Confusion Matrix')
+            plt.tight_layout()
+            plt.savefig('confusion_matrix.png')
+            plt.close()
+
+            report = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Outage Prediction Report</title>
+            </head>
+            <body>
+                <h1>Outage Prediction Analysis Report</h1>
+                <p><strong>ROC-AUC Score:</strong> {metrics['roc_auc']:.4f}</p>
+                <p><strong>Precision-Recall AUC:</strong> {metrics['pr_auc']:.4f}</p>
+            </body>
+            </html>
+            """
+            
+            with open("outage_prediction_report.html", "w") as f:
+                f.write(report)
+            print("HTML report generated successfully.")
+            
+        except Exception as e:
+            print(f"Error generating HTML report: {e}")
+            traceback.print_exc()
+
+    def run(self):
+        df = self.load_and_preprocess_data()
+        if df.empty:
+            print("No data to process.")
+            return
+        
+        X, y = self.feature_engineering(df)
+        if X.empty or y.empty:
+            print("Feature engineering failed. Exiting.")
+            return
+
+        preprocessor = self.create_preprocessing_pipeline(X)
+        metrics = self.train_model(X, y)
+        
+        if metrics:
+            print("\nModel Performance:")
+            print(f"ROC-AUC Score: {metrics['roc_auc']:.4f}")
+            print(f"Precision-Recall AUC: {metrics['pr_auc']:.4f}")
+            print(f"Cross-validation ROC-AUC: {metrics['cv_scores_mean']:.4f} (+/- {metrics['cv_scores_std']*2:.4f})")
+            print("\nClassification Report:")
+            print(metrics['classification_report'])
+            
+            self.plot_feature_importances()
+            self.generate_html_report(metrics)
+
+
+def main():
+    file_path = "path_to_your_excel_file.xlsx"  # Replace with your actual file path
+    predictor = ImprovedOutagePredictionSystem(file_path)
+    predictor.run()
+
+
+if __name__ == "__main__":
+    main()
