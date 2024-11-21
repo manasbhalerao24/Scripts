@@ -243,4 +243,40 @@ class ImprovedOutagePredictionSystem:
             print("HTML report generated successfully.")
             
         except Exception as e:
-            print(f"Error generating HTML report:
+            print(f"Error generating HTML report: {e}")
+            traceback.print_exc()
+
+    def run(self):
+        df = self.load_and_preprocess_data()
+        if df.empty:
+            print("No data to process.")
+            return
+        
+        X, y = self.feature_engineering(df)
+        if X.empty or y.empty:
+            print("Feature engineering failed. Exiting.")
+            return
+
+        preprocessor = self.create_preprocessing_pipeline(X)
+        metrics = self.train_model(X, y)
+        
+        if metrics:
+            print("\nModel Performance:")
+            print(f"ROC-AUC Score: {metrics['roc_auc']:.4f}")
+            print(f"Precision-Recall AUC: {metrics['pr_auc']:.4f}")
+            print(f"Cross-validation ROC-AUC: {metrics['cv_scores_mean']:.4f} (+/- {metrics['cv_scores_std']*2:.4f})")
+            print("\nClassification Report:")
+            print(metrics['classification_report'])
+            
+            self.plot_feature_importances()
+            self.generate_html_report(metrics)
+
+
+def main():
+    file_path = "path_to_your_excel_file.xlsx"  # Replace with your actual file path
+    predictor = ImprovedOutagePredictionSystem(file_path)
+    predictor.run()
+
+
+if __name__ == "__main__":
+    main()
