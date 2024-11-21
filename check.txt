@@ -125,23 +125,20 @@ class ImprovedOutagePredictionSystem:
     def train_model(self, X, y):
         print("Training the model...")
         try:
+            # Split data into train and test sets
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=0.2, stratify=y, random_state=42
             )
             
-            # Apply SMOTE and convert to DataFrame to retain column names
-            smote = SMOTE(random_state=42, sampling_strategy='auto')
-            X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
-            X_train_resampled = pd.DataFrame(X_train_resampled, columns=X.columns)
-            X_test = pd.DataFrame(X_test, columns=X.columns)
-            
-            # Apply preprocessing pipeline
-            print("Fitting preprocessing pipeline...")
-            X_train_transformed = self.preprocessor.fit_transform(X_train_resampled)
+            # Apply preprocessing pipeline on training and test sets
+            print("Applying preprocessing pipeline...")
+            X_train_transformed = self.preprocessor.fit_transform(X_train)
             X_test_transformed = self.preprocessor.transform(X_test)
             
-            # Retrieve feature names after transformation
-            feature_names = self.preprocessor.get_feature_names_out()
+            # SMOTE only on the training data
+            print("Applying SMOTE...")
+            smote = SMOTE(random_state=42, sampling_strategy='auto')
+            X_train_resampled, y_train_resampled = smote.fit_resample(X_train_transformed, y_train)
             
             # Train Random Forest model
             param_grid = {
@@ -159,15 +156,19 @@ class ImprovedOutagePredictionSystem:
                 scoring='roc_auc', n_jobs=-1, random_state=42
             )
             
-            random_search.fit(X_train_transformed, y_train_resampled)
+            print("Training the model...")
+            random_search.fit(X_train_resampled, y_train_resampled)
             self.model = random_search.best_estimator_
             
             # Compute feature importances
+            feature_names = self.preprocessor.get_feature_names_out()
             self.feature_importances_ = pd.Series(
                 self.model.feature_importances_,
                 index=feature_names
             ).sort_values(ascending=False)
             
+            # Evaluate the model on test data
+            print("Evaluating the model...")
             y_pred = self.model.predict(X_test_transformed)
             y_pred_proba = self.model.predict_proba(X_test_transformed)[:, 1]
             
@@ -242,40 +243,4 @@ class ImprovedOutagePredictionSystem:
             print("HTML report generated successfully.")
             
         except Exception as e:
-            print(f"Error generating HTML report: {e}")
-            traceback.print_exc()
-
-    def run(self):
-        df = self.load_and_preprocess_data()
-        if df.empty:
-            print("No data to process.")
-            return
-        
-        X, y = self.feature_engineering(df)
-        if X.empty or y.empty:
-            print("Feature engineering failed. Exiting.")
-            return
-
-        preprocessor = self.create_preprocessing_pipeline(X)
-        metrics = self.train_model(X, y)
-        
-        if metrics:
-            print("\nModel Performance:")
-            print(f"ROC-AUC Score: {metrics['roc_auc']:.4f}")
-            print(f"Precision-Recall AUC: {metrics['pr_auc']:.4f}")
-            print(f"Cross-validation ROC-AUC: {metrics['cv_scores_mean']:.4f} (+/- {metrics['cv_scores_std']*2:.4f})")
-            print("\nClassification Report:")
-            print(metrics['classification_report'])
-            
-            self.plot_feature_importances()
-            self.generate_html_report(metrics)
-
-
-def main():
-    file_path = "path_to_your_excel_file.xlsx"  # Replace with your actual file path
-    predictor = ImprovedOutagePredictionSystem(file_path)
-    predictor.run()
-
-
-if __name__ == "__main__":
-    main()
+            print(f"Error generating HTML report:
