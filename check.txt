@@ -178,7 +178,6 @@ class ImprovedOutagePredictionSystem:
             print(f"Error during training: {e}")
             traceback.print_exc()
             return {}
-
     def plot_feature_importances(self):
         """Plot and save feature importances."""
         if self.feature_importances_ is not None:
@@ -235,7 +234,6 @@ class ImprovedOutagePredictionSystem:
 
     def run(self):
         """Run the full pipeline."""
-        df = self.load
         df = self.load_and_preprocess_data()
         if df.empty:
             print("No data to process. Exiting.")
