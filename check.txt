@@ -21,6 +21,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from imblearn.over_sampling import SMOTE
 import traceback
+import os
 
 
 class ImprovedOutagePredictionSystem:
@@ -164,6 +165,13 @@ class ImprovedOutagePredictionSystem:
                 "confusion_matrix": confusion_matrix(y_test, y_pred)
             }
 
+            # Compute feature importances
+            feature_names = self.preprocessor.get_feature_names_out()
+            self.feature_importances_ = pd.Series(
+                self.model.feature_importances_,
+                index=feature_names
+            ).sort_values(ascending=False)
+
             print("Model training complete.")
             return metrics
         except Exception as e:
@@ -171,8 +179,63 @@ class ImprovedOutagePredictionSystem:
             traceback.print_exc()
             return {}
 
+    def plot_feature_importances(self):
+        """Plot and save feature importances."""
+        if self.feature_importances_ is not None:
+            plt.figure(figsize=(10, 6))
+            self.feature_importances_[:10].plot(kind='bar')
+            plt.title('Top 10 Most Important Features')
+            plt.tight_layout()
+            plt.savefig('feature_importances.png')
+            plt.close()
+        else:
+            print("Feature importances are not available. Skipping plot.")
+
+    def generate_html_report(self, metrics):
+        """Generate an HTML report of the model's performance."""
+        print("Generating HTML report...")
+        try:
+            # Save confusion matrix plot
+            plt.figure(figsize=(8, 6))
+            sns.heatmap(metrics['confusion_matrix'], annot=True, fmt='d', cmap='Blues',
+                        xticklabels=['No Outage', 'Outage'], yticklabels=['No Outage', 'Outage'])
+            plt.title('Confusion Matrix')
+            plt.tight_layout()
+            plt.savefig('confusion_matrix.png')
+            plt.close()
+
+            # Generate the HTML content
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Outage Prediction Report</title>
+            </head>
+            <body>
+                <h1>Outage Prediction Analysis Report</h1>
+                <p><strong>ROC-AUC Score:</strong> {metrics['roc_auc']:.4f}</p>
+                <p><strong>Precision-Recall AUC:</strong> {metrics['pr_auc']:.4f}</p>
+                <h2>Classification Report</h2>
+                <pre>{metrics['classification_report']}</pre>
+                <h2>Confusion Matrix</h2>
+                <img src="confusion_matrix.png" alt="Confusion Matrix">
+                <h2>Top 10 Features by Importance</h2>
+                <img src="feature_importances.png" alt="Feature Importances">
+            </body>
+            </html>
+            """
+
+            # Save the HTML report
+            with open("outage_prediction_report.html", "w") as f:
+                f.write(html_content)
+            print("HTML report generated: outage_prediction_report.html")
+        except Exception as e:
+            print(f"Error generating HTML report: {e}")
+            traceback.print_exc()
+
     def run(self):
         """Run the full pipeline."""
+        df = self.load
         df = self.load_and_preprocess_data()
         if df.empty:
             print("No data to process. Exiting.")
@@ -193,8 +256,13 @@ class ImprovedOutagePredictionSystem:
             print("\nClassification Report:")
             print(metrics['classification_report'])
 
+            # Generate plots and reports
+            self.plot_feature_importances()
+            self.generate_html_report(metrics)
+
 
 def main():
+    """Main entry point for the script."""
     file_path = "path_to_your_excel_file.xlsx"  # Replace with your actual file path
     predictor = ImprovedOutagePredictionSystem(file_path)
     predictor.run()
